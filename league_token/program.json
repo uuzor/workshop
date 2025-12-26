@@ -1,0 +1,6 @@
+{
+    "program": "league_token.aleo",
+    "version": "1.0.0",
+    "description": "$LEAGUE platform token with 30% airdrop for early users",
+    "license": "MIT"
+}
