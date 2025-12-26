@@ -1,0 +1,6 @@
+{
+    "program": "premier_league_betting.aleo",
+    "version": "1.0.0",
+    "description": "A privacy-focused Premier League virtual betting platform on Aleo blockchain",
+    "license": "MIT"
+}
