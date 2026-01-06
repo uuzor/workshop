@@ -1,6 +1,6 @@
-# Premier League Virtual Betting - Complete System
+# Premier League Virtual Betting - Complete System (ENHANCED)
 
-A comprehensive betting platform on Aleo blockchain with seasons, NFTs, and platform tokens.
+A comprehensive betting platform on Aleo blockchain with **ChaCha randomness**, **multi-bet slips (parlays)**, seasons, NFTs, and platform tokens.
 
 ## 🎯 System Overview
 
@@ -25,12 +25,14 @@ This is a complete betting ecosystem consisting of three smart contracts:
 - **Marketplace**: Trade badges with 2.5% fees
 - **Rarity Levels**: Common, Rare, Legendary
 
-### Betting System
+### Betting System (ENHANCED)
+- **ChaCha Randomness**: Random team matching + random score generation
+- **Multi-Bet Slips**: Bet on 1-5 matches in one slip (DEFAULT)
+- **Parlay Odds**: Accumulated odds for bigger payouts
 - **Seasons**: 36 rounds per season
 - **Matches**: 10 matches per round (every 15 minutes)
 - **Total Matches**: 360 matches per season
 - **Match Betting**: Paid with $LEAGUE tokens
-- **Season Betting**: Free entry, prize pool from 2% of all bets
 - **House Edge**: 4% on match bets
 - **Badge Bonus**: 5% better odds for badge holders
 
@@ -129,7 +131,7 @@ leo run list_badge <badge_record> 1000u64
 leo run buy_badge <listing_record> <buyer_address>
 ```
 
-#### Test Betting Contract
+#### Test Betting Contract (ENHANCED WITH RANDOMNESS & MULTI-BET)
 ```bash
 cd premier_league_betting
 
@@ -140,17 +142,23 @@ leo run add_team 2u8 234567field 92u8  # Arsenal
 # Start season
 leo run start_season 1u8 <timestamp>
 
-# Schedule match
-leo run schedule_match <match_id> 1u8 1u8 1u8 2u8
+# Start round with RANDOM team matching
+leo run start_round_random 1u8 1u8 <timestamp>
 
-# Place bet
-leo run place_match_bet <match_id> 1u8 100u64 true 1u8
+# Place MULTI-BET slip (bet on 3 matches at once!)
+leo run place_multi_bet 1u8 1u8 \
+    1111111field 1u8 \     # Match 1: home win
+    2222222field 2u8 \     # Match 2: draw
+    3333333field 3u8 \     # Match 3: away win
+    0field 0u8 \           # No match 4
+    0field 0u8 \           # No match 5
+    100u64 true            # 100 stake, has badge
 
-# Simulate match
-leo run simulate_match <match_id> 2u8 1u8
+# End round - resolves ALL matches with RANDOM scores
+leo run end_round 1u8 1u8
 
-# Place season bet (free)
-leo run place_season_bet 1u8 1u8 <timestamp>
+# Claim winnings (if bet slip won)
+leo run claim_winnings <bet_slip_record>
 ```
 
 ## 📋 Contract Reference
@@ -179,18 +187,18 @@ leo run place_season_bet 1u8 1u8 <timestamp>
 | `cancel_listing` | User | Remove from marketplace |
 | `transfer_badge` | User | Gift badge to another user |
 
-### premier_league_betting.aleo Functions
+### premier_league_betting.aleo Functions (ENHANCED)
 
 | Function | Type | Description |
 |----------|------|-------------|
 | `add_team` | Admin | Add team to league |
 | `start_season` | Admin | Start new season |
-| `start_round` | Admin | Start round (15min intervals) |
-| `schedule_match` | Admin | Schedule match in round |
-| `simulate_match` | Oracle | Record match result |
-| `place_match_bet` | User | Bet on match outcome |
-| `place_season_bet` | User | Predict season winner (free) |
-| `settle_match_bet` | User | Claim match winnings |
+| `start_round_random` | Admin | Start round with random team matching |
+| `end_round` | Admin | End round and resolve with random scores |
+| `place_multi_bet` | User | **Place multi-bet slip (1-5 matches, DEFAULT)** |
+| `claim_winnings` | User | Claim winnings from bet slip |
+| `check_bet_won` | Helper | Check if single bet won (off-chain) |
+| `calculate_parlay_odds` | Helper | Calculate parlay odds (off-chain) |
 
 ## 🎮 User Journey
 
