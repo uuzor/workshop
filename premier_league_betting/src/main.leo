@@ -50,17 +50,15 @@ program premier_league_betting.aleo {
     }
 
     // MULTI-BET SLIP - Users can bet on multiple matches at once
+    // Now supports up to 10 bets using arrays!
     record BetSlip {
         owner: address,
         season_id: u8,
         round_number: u8,
-        bet1: BetEntry,        // Mandatory first bet
-        bet2: BetEntry,        // Optional (use match_id 0 if empty)
-        bet3: BetEntry,        // Optional
-        bet4: BetEntry,        // Optional
-        bet5: BetEntry,        // Optional
+        bets: [BetEntry; 10],  // Array of up to 10 bets!
+        num_bets: u8,          // How many bets are active (1-10)
         total_stake: u64,
-        total_odds: u64,       // Accumulated odds
+        total_odds: u64,       // Accumulated parlay odds
         has_badge_bonus: bool,
         slip_id: field,
     }
@@ -209,91 +207,77 @@ program premier_league_betting.aleo {
     // MULTI-BET SLIP FUNCTIONALITY
     // ========================================
 
-    // Place multi-bet slip (1-5 matches)
+    // Place multi-bet slip (1-10 matches) - NOW WITH ARRAYS!
     transition place_multi_bet(
         season_id: u8,
         round_number: u8,
-        // Bet 1 (mandatory)
-        match1_id: field,
-        bet1_type: u8,
-        // Bet 2 (optional - use 0field if not used)
-        match2_id: field,
-        bet2_type: u8,
-        // Bet 3 (optional)
-        match3_id: field,
-        bet3_type: u8,
-        // Bet 4 (optional)
-        match4_id: field,
-        bet4_type: u8,
-        // Bet 5 (optional)
-        match5_id: field,
-        bet5_type: u8,
-        // Total stake
+        match_ids: [field; 10],    // Array of match IDs
+        bet_types: [u8; 10],       // Array of bet types (1=home, 2=draw, 3=away)
+        num_bets: u8,              // How many bets (1-10)
         total_stake: u64,
         has_badge: bool
     ) -> BetSlip {
         assert(total_stake >= 1u64);
-        assert(bet1_type >= 1u8 && bet1_type <= 3u8);
+        assert(num_bets >= 1u8 && num_bets <= 10u8);
+        assert(bet_types[0u32] >= 1u8 && bet_types[0u32] <= 3u8);
 
-        // Calculate odds for each bet (simplified - base 2.00x)
+        // Calculate odds for each bet (base 2.00x)
         let base_odds: u64 = 200u64;
 
-        // Apply badge bonus if applicable
+        // Apply badge bonus if applicable (5%)
         let effective_odds: u64 = has_badge ?
-            (base_odds * 105u64) / 100u64 :
-            base_odds;
+            (base_odds * 105u64) / 100u64 : base_odds;
 
         // Apply house edge (4%)
         let final_odds: u64 = (effective_odds * 96u64) / 100u64;
 
-        // Count number of bets
-        let num_bets: u8 = 1u8
-            + (match2_id != 0field ? 1u8 : 0u8)
-            + (match3_id != 0field ? 1u8 : 0u8)
-            + (match4_id != 0field ? 1u8 : 0u8)
-            + (match5_id != 0field ? 1u8 : 0u8);
+        // Create array of BetEntry structs
+        let bets: [BetEntry; 10] = [
+            BetEntry { match_id: match_ids[0u32], bet_type: bet_types[0u32], odds: final_odds },
+            BetEntry { match_id: match_ids[1u32], bet_type: bet_types[1u32], odds: final_odds },
+            BetEntry { match_id: match_ids[2u32], bet_type: bet_types[2u32], odds: final_odds },
+            BetEntry { match_id: match_ids[3u32], bet_type: bet_types[3u32], odds: final_odds },
+            BetEntry { match_id: match_ids[4u32], bet_type: bet_types[4u32], odds: final_odds },
+            BetEntry { match_id: match_ids[5u32], bet_type: bet_types[5u32], odds: final_odds },
+            BetEntry { match_id: match_ids[6u32], bet_type: bet_types[6u32], odds: final_odds },
+            BetEntry { match_id: match_ids[7u32], bet_type: bet_types[7u32], odds: final_odds },
+            BetEntry { match_id: match_ids[8u32], bet_type: bet_types[8u32], odds: final_odds },
+            BetEntry { match_id: match_ids[9u32], bet_type: bet_types[9u32], odds: final_odds },
+        ];
 
-        // Accumulate odds (multiply for parlay)
+        // Calculate parlay odds (multiply odds for each bet, dividing after each step to prevent overflow)
+        let odds_2: u64 = (final_odds * final_odds) / 100u64;
+        let odds_3: u64 = (odds_2 * final_odds) / 100u64;
+        let odds_4: u64 = (odds_3 * final_odds) / 100u64;
+        let odds_5: u64 = (odds_4 * final_odds) / 100u64;
+        let odds_6: u64 = (odds_5 * final_odds) / 100u64;
+        let odds_7: u64 = (odds_6 * final_odds) / 100u64;
+        let odds_8: u64 = (odds_7 * final_odds) / 100u64;
+        let odds_9: u64 = (odds_8 * final_odds) / 100u64;
+        let odds_10: u64 = (odds_9 * final_odds) / 100u64;
+
         let total_odds: u64 = num_bets == 1u8 ? final_odds :
-            num_bets == 2u8 ? (final_odds * final_odds) / 100u64 :
-            num_bets == 3u8 ? (final_odds * final_odds * final_odds) / 10000u64 :
-            num_bets == 4u8 ? (final_odds * final_odds * final_odds * final_odds) / 1000000u64 :
-            (final_odds * final_odds * final_odds * final_odds * final_odds) / 100000000u64;
+            num_bets == 2u8 ? odds_2 :
+            num_bets == 3u8 ? odds_3 :
+            num_bets == 4u8 ? odds_4 :
+            num_bets == 5u8 ? odds_5 :
+            num_bets == 6u8 ? odds_6 :
+            num_bets == 7u8 ? odds_7 :
+            num_bets == 8u8 ? odds_8 :
+            num_bets == 9u8 ? odds_9 :
+            odds_10;
 
-        // Generate slip ID (unique based on match IDs and stake)
+        // Generate slip ID
         let slip_id: field = BHP256::hash_to_field(
-            match1_id + match2_id + match3_id + match4_id + match5_id + total_stake as field
+            match_ids[0u32] + match_ids[1u32] + match_ids[2u32] + total_stake as field
         );
 
         return BetSlip {
             owner: self.caller,
             season_id: season_id,
             round_number: round_number,
-            bet1: BetEntry {
-                match_id: match1_id,
-                bet_type: bet1_type,
-                odds: final_odds,
-            },
-            bet2: BetEntry {
-                match_id: match2_id,
-                bet_type: bet2_type,
-                odds: final_odds,
-            },
-            bet3: BetEntry {
-                match_id: match3_id,
-                bet_type: bet3_type,
-                odds: final_odds,
-            },
-            bet4: BetEntry {
-                match_id: match4_id,
-                bet_type: bet4_type,
-                odds: final_odds,
-            },
-            bet5: BetEntry {
-                match_id: match5_id,
-                bet_type: bet5_type,
-                odds: final_odds,
-            },
+            bets: bets,
+            num_bets: num_bets,
             total_stake: total_stake,
             total_odds: total_odds,
             has_badge_bonus: has_badge,
