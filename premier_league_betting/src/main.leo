@@ -168,30 +168,33 @@ program premier_league_betting.aleo {
         Mapping::set(round_status, round_key, 1u8);  // betting open
         Mapping::set(round_start_times, round_key, round_time);
 
-        // Create 10 random matches using ChaCha randomness
-        // Match 1
-        let team1_home: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
-        let team1_away: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
-        // Ensure different teams
-        let team1_away_final: u8 = team1_home == team1_away ?
-            (team1_away % 20u8) + 1u8 : team1_away;
+        // Create 10 random matches using FOR LOOP
+        for match_num: u8 in 0u8..10u8 {
+            // Generate random team IDs (1-20)
+            let home_team: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
+            let away_team: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
 
-        let match1_id: field = BHP256::hash_to_field(
-            season_id as field + round_number as field + 1field
-        );
-        Mapping::set(matches, match1_id, Match {
-            id: match1_id,
-            season_id: season_id,
-            round_number: round_number,
-            home_team: team1_home,
-            away_team: team1_away_final,
-            home_score: 0u8,
-            away_score: 0u8,
-            status: 0u8,
-        });
+            // Ensure different teams
+            let away_team_final: u8 = home_team == away_team ?
+                (away_team % 20u8) + 1u8 : away_team;
 
-        // Match 2-10 would follow similar pattern
-        // (Simplified for space - in production, all 10 matches created)
+            // Generate unique match ID (season + round + match_number)
+            let match_id: field = BHP256::hash_to_field(
+                season_id as field + round_number as field + (match_num + 1u8) as field
+            );
+
+            // Create and store the match
+            Mapping::set(matches, match_id, Match {
+                id: match_id,
+                season_id: season_id,
+                round_number: round_number,
+                home_team: home_team,
+                away_team: away_team_final,
+                home_score: 0u8,
+                away_score: 0u8,
+                status: 0u8,  // not started
+            });
+        }
 
         // Update season current round
         let season: Season = Mapping::get(seasons, season_id);
@@ -231,7 +234,8 @@ program premier_league_betting.aleo {
         // Apply house edge (4%)
         let final_odds: u64 = (effective_odds * 96u64) / 100u64;
 
-        // Create array of BetEntry structs
+        // Create array of BetEntry structs (using manual initialization for now)
+        // Note: Leo doesn't support mutable local arrays, so we initialize all at once
         let bets: [BetEntry; 10] = [
             BetEntry { match_id: match_ids[0u32], bet_type: bet_types[0u32], odds: final_odds },
             BetEntry { match_id: match_ids[1u32], bet_type: bet_types[1u32], odds: final_odds },
@@ -289,78 +293,116 @@ program premier_league_betting.aleo {
     // END ROUND WITH RANDOM SCORE GENERATION
     // ========================================
 
-    // End round - resolves all matches with random scores
+    // End round - resolves matches in batches (Aleo limit: 16 sets per finalize)
+    // Call this function 4 times: batch 0-2, 3-5, 6-8, 9
     async transition end_round(
         public season_id: u8,
-        public round_number: u8
+        public round_number: u8,
+        public batch_start: u8  // 0, 3, 6, or 9
     ) -> Future {
-        return finalize_end_round(season_id, round_number);
+        return finalize_end_round(season_id, round_number, batch_start);
     }
 
     async function finalize_end_round(
         public season_id: u8,
-        public round_number: u8
+        public round_number: u8,
+        public batch_start: u8
     ) {
-        // Mark round as ended
-        let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
-        Mapping::set(round_status, round_key, 2u8);  // ended
+        // Only mark round as ended on first batch
+        if batch_start == 0u8 {
+            let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
+            Mapping::set(round_status, round_key, 2u8);  // ended
+        }
 
-        // Resolve Match 1 with random scores
-        let match1_id: field = BHP256::hash_to_field(
-            season_id as field + round_number as field + 1field
-        );
-        let match1: Match = Mapping::get(matches, match1_id);
+        // Determine batch size (3 for batches 0,3,6 and 1 for batch 9)
+        let batch_size: u8 = batch_start == 9u8 ? 1u8 : 3u8;
 
-        // Generate random scores using ChaCha (0-5 goals typical)
-        let home_score: u8 = ChaCha::rand_u8() % 6u8;
-        let away_score: u8 = ChaCha::rand_u8() % 6u8;
+        // Resolve matches in this batch using FOR LOOP
+        for offset: u8 in 0u8..3u8 {
+            let match_num: u8 = batch_start + offset;
 
-        // Update match with scores
-        Mapping::set(matches, match1_id, Match {
-            id: match1.id,
-            season_id: match1.season_id,
-            round_number: match1.round_number,
-            home_team: match1.home_team,
-            away_team: match1.away_team,
-            home_score: home_score,
-            away_score: away_score,
-            status: 1u8,  // finished
-        });
+            // Skip if beyond batch size (for last batch)
+            if offset < batch_size {
+            // Get match ID (same formula as creation)
+            let match_id: field = BHP256::hash_to_field(
+                season_id as field + round_number as field + (match_num + 1u8) as field
+            );
+            let current_match: Match = Mapping::get(matches, match_id);
 
-        // Determine outcome
-        let outcome: u8 = home_score > away_score ? 1u8 :
-            (home_score < away_score ? 3u8 : 2u8);
-        Mapping::set(match_outcomes, match1_id, outcome);
+            // Generate random scores using ChaCha (0-5 goals typical)
+            let home_score: u8 = ChaCha::rand_u8() % 6u8;
+            let away_score: u8 = ChaCha::rand_u8() % 6u8;
 
-        // Update standings for both teams
-        let home_points_add: u32 = outcome == 1u8 ? 3u32 : (outcome == 2u8 ? 1u32 : 0u32);
-        let away_points_add: u32 = outcome == 3u8 ? 3u32 : (outcome == 2u8 ? 1u32 : 0u32);
+            // Update match with scores
+            Mapping::set(matches, match_id, Match {
+                id: current_match.id,
+                season_id: current_match.season_id,
+                round_number: current_match.round_number,
+                home_team: current_match.home_team,
+                away_team: current_match.away_team,
+                home_score: home_score,
+                away_score: away_score,
+                status: 1u8,  // finished
+            });
 
-        let home_key: field = BHP256::hash_to_field(season_id as field + match1.home_team as field);
-        let home_standing: Standing = Mapping::get_or_use(standings, home_key, Standing {
-            team_id: match1.home_team,
-            season_id: season_id,
-            points: 0u32,
-            wins: 0u16,
-            draws: 0u16,
-            losses: 0u16,
-            goals_for: 0u16,
-            goals_against: 0u16,
-        });
+            // Determine outcome (1=home, 2=draw, 3=away)
+            let outcome: u8 = home_score > away_score ? 1u8 :
+                (home_score < away_score ? 3u8 : 2u8);
+            Mapping::set(match_outcomes, match_id, outcome);
 
-        Mapping::set(standings, home_key, Standing {
-            team_id: home_standing.team_id,
-            season_id: home_standing.season_id,
-            points: home_standing.points + home_points_add,
-            wins: home_standing.wins + (outcome == 1u8 ? 1u16 : 0u16),
-            draws: home_standing.draws + (outcome == 2u8 ? 1u16 : 0u16),
-            losses: home_standing.losses + (outcome == 3u8 ? 1u16 : 0u16),
-            goals_for: home_standing.goals_for + home_score as u16,
-            goals_against: home_standing.goals_against + away_score as u16,
-        });
+            // Calculate points for each team
+            let home_points_add: u32 = outcome == 1u8 ? 3u32 : (outcome == 2u8 ? 1u32 : 0u32);
+            let away_points_add: u32 = outcome == 3u8 ? 3u32 : (outcome == 2u8 ? 1u32 : 0u32);
 
-        // Similar for away team and remaining matches 2-10
-        // (Simplified for space - in production, all 10 matches resolved)
+            // Update home team standings
+            let home_key: field = BHP256::hash_to_field(season_id as field + current_match.home_team as field);
+            let home_standing: Standing = Mapping::get_or_use(standings, home_key, Standing {
+                team_id: current_match.home_team,
+                season_id: season_id,
+                points: 0u32,
+                wins: 0u16,
+                draws: 0u16,
+                losses: 0u16,
+                goals_for: 0u16,
+                goals_against: 0u16,
+            });
+
+            Mapping::set(standings, home_key, Standing {
+                team_id: home_standing.team_id,
+                season_id: home_standing.season_id,
+                points: home_standing.points + home_points_add,
+                wins: home_standing.wins + (outcome == 1u8 ? 1u16 : 0u16),
+                draws: home_standing.draws + (outcome == 2u8 ? 1u16 : 0u16),
+                losses: home_standing.losses + (outcome == 3u8 ? 1u16 : 0u16),
+                goals_for: home_standing.goals_for + home_score as u16,
+                goals_against: home_standing.goals_against + away_score as u16,
+            });
+
+            // Update away team standings
+            let away_key: field = BHP256::hash_to_field(season_id as field + current_match.away_team as field);
+            let away_standing: Standing = Mapping::get_or_use(standings, away_key, Standing {
+                team_id: current_match.away_team,
+                season_id: season_id,
+                points: 0u32,
+                wins: 0u16,
+                draws: 0u16,
+                losses: 0u16,
+                goals_for: 0u16,
+                goals_against: 0u16,
+            });
+
+            Mapping::set(standings, away_key, Standing {
+                team_id: away_standing.team_id,
+                season_id: away_standing.season_id,
+                points: away_standing.points + away_points_add,
+                wins: away_standing.wins + (outcome == 3u8 ? 1u16 : 0u16),
+                draws: away_standing.draws + (outcome == 2u8 ? 1u16 : 0u16),
+                losses: away_standing.losses + (outcome == 1u8 ? 1u16 : 0u16),
+                goals_for: away_standing.goals_for + away_score as u16,
+                goals_against: away_standing.goals_against + home_score as u16,
+            });
+            }  // end if offset < batch_size
+        }  // end for loop
     }
 
     // ========================================
