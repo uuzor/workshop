@@ -1,0 +1,6 @@
+{
+    "program": "all4one.aleo",
+    "version": "0.1.0",
+    "description": "Privacy-preserving anti-majority prediction market. The minority side wins and takes the majority's stake. All bets are hidden until resolution.",
+    "license": "MIT"
+}
