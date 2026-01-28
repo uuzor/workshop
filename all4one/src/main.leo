@@ -38,6 +38,7 @@ program all4one.aleo {
         segment_blocks: u32,
         question_hash: field,
         min_bettors: u64,
+        bet_amount: u64,           // Fixed bet amount - everyone bets exactly this
         fee_recipient: address,
         maker_fee_bps: u64,
     }
@@ -100,11 +101,14 @@ program all4one.aleo {
         public end_block: u32,
         public resolver: address,
         public min_bettors: u64,
+        public bet_amount: u64,
         public fee_recipient: address,
         public maker_fee_bps: u64
     ) -> (MarketReceipt, Future) {
         assert(end_block > start_block);
         assert(min_bettors >= 1u64);
+        // Fixed bet amount must be positive
+        assert(bet_amount > 0u64);
         let duration: u32 = end_block - start_block;
         // Minimum 6 hours duration
         assert(duration >= MIN_DURATION_BLOCKS);
@@ -114,7 +118,7 @@ program all4one.aleo {
         assert(segment_blocks > 0u32);
         let market_id: field = BHP256::hash_to_field(question_hash);
         let receipt: MarketReceipt = MarketReceipt { owner: self.caller, market_id: market_id };
-        return (receipt, finalize_create_market(market_id, self.caller, resolver, start_block, end_block, segment_blocks, question_hash, min_bettors, fee_recipient, maker_fee_bps));
+        return (receipt, finalize_create_market(market_id, self.caller, resolver, start_block, end_block, segment_blocks, question_hash, min_bettors, bet_amount, fee_recipient, maker_fee_bps));
     }
 
     async function finalize_create_market(
@@ -126,6 +130,7 @@ program all4one.aleo {
         segment_blocks: u32,
         question_hash: field,
         min_bettors: u64,
+        bet_amount: u64,
         fee_recipient: address,
         maker_fee_bps: u64
     ) {
@@ -137,6 +142,7 @@ program all4one.aleo {
             segment_blocks: segment_blocks,
             question_hash: question_hash,
             min_bettors: min_bettors,
+            bet_amount: bet_amount,
             fee_recipient: fee_recipient,
             maker_fee_bps: maker_fee_bps,
         };
@@ -146,11 +152,11 @@ program all4one.aleo {
         Mapping::set(bettor_count, market_id, 0u64);
     }
 
-    // 2. PLACE BET
+    // 2. PLACE BET (Fixed amount per market - prevents sybil attacks)
     async transition place_bet(
         public market_id: field,
         outcome: u8,
-        amount: u64,
+        public amount: u64,
         segment: u8,
         public resolver: address
     ) -> (Bet, Commitment, Future) {
@@ -167,6 +173,8 @@ program all4one.aleo {
         let active: bool = Mapping::get(market_active, market_id);
         assert(active);
         assert_eq(resolver, config.resolver);
+        // CRITICAL: Enforce fixed bet amount - prevents sybil attacks
+        assert_eq(amount, config.bet_amount);
         let current_pool: u64 = Mapping::get_or_use(total_pool, market_id, 0u64);
         Mapping::set(total_pool, market_id, current_pool + amount);
         let current_count: u64 = Mapping::get_or_use(bettor_count, market_id, 0u64);

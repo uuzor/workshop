@@ -25,6 +25,7 @@ It's about how few agree with you.
 
 KEY MECHANICS:
 - Minority by COUNT wins (not by stake amount)
+- FIXED BET AMOUNT per market (prevents sybil attacks)
 - Early bettors get conviction bonuses (1.5x/1.3x/1.15x/1.0x)
 - Early-but-lost bettors may receive partial compensation
 - All votes remain private until resolution
@@ -44,10 +45,11 @@ echo "
 "
 
 echo "Creating a new market..."
-echo "Parameters: question_hash, start_block, end_block, resolver, min_bettors, fee_recipient, maker_fee_bps"
+echo "Parameters: question_hash, start_block, end_block, resolver, min_bettors, bet_amount, fee_recipient, maker_fee_bps"
 echo "Duration: 4000 blocks (min 2160 required = ~6 hours)"
+echo "Fixed bet amount: 100 tokens (everyone must bet exactly this)"
 echo "Maker fee: 1% (100 basis points)"
-leo run create_market 1234567890field 1000u32 5000u32 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 1u64 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 100u64
+leo run create_market 1234567890field 1000u32 5000u32 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 1u64 100u64 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 100u64
 
 echo "
 Market created! The output shows:
@@ -64,7 +66,8 @@ echo "
 # Get the market_id from the hash
 MARKET_ID="4596353239172118087610023612074830717196740054522601266584735138339109846579field"
 
-echo "Placing a bet on outcome 0 (YES) with 100 tokens in segment 0..."
+echo "Placing a bet on outcome 0 (YES) with the fixed amount (100 tokens) in segment 0..."
+echo "Note: amount MUST match the market's bet_amount or transaction will fail!"
 leo run place_bet $MARKET_ID 0u8 100u64 0u8 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr
 
 echo "
@@ -73,7 +76,8 @@ Bet placed! The output shows:
 - Commitment record (owned by resolver - for aggregation)
 - Future for on-chain state update
 
-The bet details (outcome, amount, segment) are PRIVATE!
+The bet details (outcome, segment) are PRIVATE!
+Fixed amount prevents sybil attacks - each vote costs equal capital.
 "
 
 echo "
@@ -108,8 +112,8 @@ echo "
 ###############################################################################
 
 All transitions compiled and tested successfully:
-- create_market: Creates a new betting market (min 6hr duration, 0-2% maker fee)
-- place_bet: Places a private bet with time segment
+- create_market: Creates market with fixed bet amount (min 6hr, 0-2% maker fee)
+- place_bet: Places bet (must match market's fixed bet_amount)
 - close_market: Closes market to new bets
 - resolve_market: Submits resolution with minority by COUNT
 - calc_winner_payout: Calculates winner rewards (base + conviction)
