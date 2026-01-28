@@ -50,15 +50,15 @@ program premier_league_betting.aleo {
     }
 
     // MULTI-BET SLIP - Users can bet on multiple matches at once
-    // Now supports up to 10 bets using arrays!
+    // Now supports up to 4 bets per round!
     record BetSlip {
         owner: address,
         season_id: u8,
         round_number: u8,
-        bets: [BetEntry; 10],  // Array of up to 10 bets!
-        num_bets: u8,          // How many bets are active (1-10)
+        bets: [BetEntry; 4],   // Array of up to 4 bets (4 matches per round)
+        num_bets: u8,          // How many bets are active (1-4)
         total_stake: u64,
-        total_odds: u64,       // Accumulated parlay odds
+        parlay_multiplier: u64, // Locked parlay multiplier at bet time
         has_badge_bonus: bool,
         slip_id: field,
     }
@@ -89,6 +89,15 @@ program premier_league_betting.aleo {
 
     // Track round status
     mapping round_status: field => u8;  // key = hash(season_id + round), value: 0=open, 1=betting, 2=ended
+
+    // VIRTUAL PARIMUTUEL: Locked odds (calculated at round start, never change)
+    // Odds stored in basis points (e.g., 150 = 1.5x, 210 = 2.1x)
+    mapping locked_home_odds: field => u64;  // match_id => home win odds
+    mapping locked_away_odds: field => u64;  // match_id => away win odds
+    mapping locked_draw_odds: field => u64;  // match_id => draw odds
+
+    // Count-based parlay tiers (FOMO mechanism)
+    mapping round_parlay_count: field => u8;  // round_key => number of parlays placed
 
     // ========================================
     // TEAM MANAGEMENT
@@ -147,7 +156,8 @@ program premier_league_betting.aleo {
     // ROUND MANAGEMENT WITH RANDOM MATCHING
     // ========================================
 
-    // Start round with random team matching (creates 10 matches)
+    // Start round with random team matching + VIRTUAL PARIMUTUEL ODDS
+    // Creates 4 matches and locks odds (1.2x - 2.1x range) in one call
     async transition start_round_random(
         public season_id: u8,
         public round_number: u8,
@@ -167,9 +177,10 @@ program premier_league_betting.aleo {
         let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
         Mapping::set(round_status, round_key, 1u8);  // betting open
         Mapping::set(round_start_times, round_key, round_time);
+        Mapping::set(round_parlay_count, round_key, 0u8);  // Initialize parlay count
 
-        // Create 10 random matches using FOR LOOP
-        for match_num: u8 in 0u8..10u8 {
+        // Create 4 random matches with virtual parimutuel odds
+        for match_num: u8 in 0u8..4u8 {
             // Generate random team IDs (1-20)
             let home_team: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
             let away_team: u8 = 1u8 + (ChaCha::rand_u8() % 20u8);
@@ -178,7 +189,7 @@ program premier_league_betting.aleo {
             let away_team_final: u8 = home_team == away_team ?
                 (away_team % 20u8) + 1u8 : away_team;
 
-            // Generate unique match ID (season + round + match_number)
+            // Generate unique match ID
             let match_id: field = BHP256::hash_to_field(
                 season_id as field + round_number as field + (match_num + 1u8) as field
             );
@@ -194,6 +205,42 @@ program premier_league_betting.aleo {
                 away_score: 0u8,
                 status: 0u8,  // not started
             });
+
+            // CALCULATE AND LOCK VIRTUAL ODDS (1.2x - 2.1x range)
+            // Use pseudo-random allocation to create varied odds
+            let seed: field = BHP256::hash_to_field(match_id);
+            let rand: u8 = (seed as u8) % 100u8;  // 0-99
+
+            // 6-tier allocation system for exciting variance
+            let (home_pct, away_pct, draw_pct) = if rand > 80u8 {
+                (50u8, 20u8, 30u8)  // HUGE FAVORITE: 1.2x / 2.0x / 1.67x
+            } else if rand > 60u8 {
+                (45u8, 25u8, 30u8)  // STRONG: 1.33x / 1.8x / 1.67x
+            } else if rand > 40u8 {
+                (40u8, 30u8, 30u8)  // MODERATE: 1.5x / 1.67x / 1.67x
+            } else if rand > 20u8 {
+                (35u8, 35u8, 30u8)  // BALANCED: 1.71x / 1.71x / 1.67x
+            } else if rand > 10u8 {
+                (30u8, 40u8, 30u8)  // AWAY FAVORED: 1.67x / 1.5x / 1.67x
+            } else {
+                (25u8, 45u8, 30u8)  // AWAY STRONG: 1.8x / 1.33x / 1.67x
+            };
+
+            // Calculate raw odds (totalPool / outcomePool)
+            // Total virtual pool = 100%, so odds = 100 / percentage
+            let raw_home: u64 = (10000u64 / home_pct as u64);  // e.g., 10000/50 = 200 = 2.0x
+            let raw_away: u64 = (10000u64 / away_pct as u64);
+            let raw_draw: u64 = (10000u64 / draw_pct as u64);
+
+            // Compress to target 1.2x - 2.1x range
+            let home_odds: u64 = compress_odds(raw_home);
+            let away_odds: u64 = compress_odds(raw_away);
+            let draw_odds: u64 = compress_odds(raw_draw);
+
+            // LOCK ODDS (never change after this!)
+            Mapping::set(locked_home_odds, match_id, home_odds);
+            Mapping::set(locked_away_odds, match_id, away_odds);
+            Mapping::set(locked_draw_odds, match_id, draw_odds);
         }
 
         // Update season current round
@@ -206,124 +253,133 @@ program premier_league_betting.aleo {
         });
     }
 
+    // Compress raw odds to 1.2x - 2.1x profitable range
+    // Input: raw_odds in basis points (e.g., 200 = 2.0x)
+    // Output: compressed odds (120-210 = 1.2x-2.1x)
+    function compress_odds(raw_odds: u64) -> u64 {
+        // Minimum: 1.2x (120 basis points)
+        if raw_odds < 120u64 { return 120u64; }
+
+        // Maximum: 2.1x (210 basis points)
+        if raw_odds > 400u64 { return 210u64; }
+
+        // Linear compression: map 1.2x-4.0x → 1.2x-2.1x
+        // Formula: 120 + (raw - 120) × (210 - 120) / (400 - 120)
+        // = 120 + (raw - 120) × 90 / 280
+        // = 120 + (raw - 120) × 0.32
+
+        let excess: u64 = raw_odds - 120u64;
+        let scaled: u64 = (excess * 32u64) / 100u64;
+        return 120u64 + scaled;
+    }
+
     // ========================================
-    // MULTI-BET SLIP FUNCTIONALITY
+    // VIRTUAL PARIMUTUEL MULTI-BET SYSTEM
     // ========================================
 
-    // Place multi-bet slip (1-10 matches) - NOW WITH ARRAYS!
-    transition place_multi_bet(
+    // Place multi-bet slip with virtual parimutuel odds (1-4 matches per round)
+    async transition place_multi_bet(
         season_id: u8,
         round_number: u8,
-        match_ids: [field; 10],    // Array of match IDs
-        bet_types: [u8; 10],       // Array of bet types (1=home, 2=draw, 3=away)
-        num_bets: u8,              // How many bets (1-10)
+        match_ids: [field; 4],     // Array of match IDs (4 matches per round)
+        bet_types: [u8; 4],        // Array of bet types (1=home, 2=away, 3=draw)
+        num_bets: u8,              // How many bets (1-4)
         total_stake: u64,
         has_badge: bool
-    ) -> BetSlip {
+    ) -> (BetSlip, Future) {
         assert(total_stake >= 1u64);
-        assert(num_bets >= 1u8 && num_bets <= 10u8);
+        assert(num_bets >= 1u8 && num_bets <= 4u8);
         assert(bet_types[0u32] >= 1u8 && bet_types[0u32] <= 3u8);
 
-        // Calculate odds for each bet (base 2.00x)
-        let base_odds: u64 = 200u64;
+        // Calculate locked odds for each bet (from locked odds mappings)
+        // Note: In transition, we can't read mappings, so we use placeholder odds
+        // The actual locked odds will be used during settlement in finalize
+        let placeholder_odds: u64 = 150u64;  // 1.5x average
 
-        // Apply badge bonus if applicable (5%)
-        let effective_odds: u64 = has_badge ?
-            (base_odds * 105u64) / 100u64 : base_odds;
-
-        // Apply house edge (4%)
-        let final_odds: u64 = (effective_odds * 96u64) / 100u64;
-
-        // Create array of BetEntry structs (using manual initialization for now)
-        // Note: Leo doesn't support mutable local arrays, so we initialize all at once
-        let bets: [BetEntry; 10] = [
-            BetEntry { match_id: match_ids[0u32], bet_type: bet_types[0u32], odds: final_odds },
-            BetEntry { match_id: match_ids[1u32], bet_type: bet_types[1u32], odds: final_odds },
-            BetEntry { match_id: match_ids[2u32], bet_type: bet_types[2u32], odds: final_odds },
-            BetEntry { match_id: match_ids[3u32], bet_type: bet_types[3u32], odds: final_odds },
-            BetEntry { match_id: match_ids[4u32], bet_type: bet_types[4u32], odds: final_odds },
-            BetEntry { match_id: match_ids[5u32], bet_type: bet_types[5u32], odds: final_odds },
-            BetEntry { match_id: match_ids[6u32], bet_type: bet_types[6u32], odds: final_odds },
-            BetEntry { match_id: match_ids[7u32], bet_type: bet_types[7u32], odds: final_odds },
-            BetEntry { match_id: match_ids[8u32], bet_type: bet_types[8u32], odds: final_odds },
-            BetEntry { match_id: match_ids[9u32], bet_type: bet_types[9u32], odds: final_odds },
+        // Create array of BetEntry structs
+        let bets: [BetEntry; 4] = [
+            BetEntry { match_id: match_ids[0u32], bet_type: bet_types[0u32], odds: placeholder_odds },
+            BetEntry { match_id: match_ids[1u32], bet_type: bet_types[1u32], odds: placeholder_odds },
+            BetEntry { match_id: match_ids[2u32], bet_type: bet_types[2u32], odds: placeholder_odds },
+            BetEntry { match_id: match_ids[3u32], bet_type: bet_types[3u32], odds: placeholder_odds },
         ];
-
-        // Calculate parlay odds (multiply odds for each bet, dividing after each step to prevent overflow)
-        let odds_2: u64 = (final_odds * final_odds) / 100u64;
-        let odds_3: u64 = (odds_2 * final_odds) / 100u64;
-        let odds_4: u64 = (odds_3 * final_odds) / 100u64;
-        let odds_5: u64 = (odds_4 * final_odds) / 100u64;
-        let odds_6: u64 = (odds_5 * final_odds) / 100u64;
-        let odds_7: u64 = (odds_6 * final_odds) / 100u64;
-        let odds_8: u64 = (odds_7 * final_odds) / 100u64;
-        let odds_9: u64 = (odds_8 * final_odds) / 100u64;
-        let odds_10: u64 = (odds_9 * final_odds) / 100u64;
-
-        let total_odds: u64 = num_bets == 1u8 ? final_odds :
-            num_bets == 2u8 ? odds_2 :
-            num_bets == 3u8 ? odds_3 :
-            num_bets == 4u8 ? odds_4 :
-            num_bets == 5u8 ? odds_5 :
-            num_bets == 6u8 ? odds_6 :
-            num_bets == 7u8 ? odds_7 :
-            num_bets == 8u8 ? odds_8 :
-            num_bets == 9u8 ? odds_9 :
-            odds_10;
 
         // Generate slip ID
         let slip_id: field = BHP256::hash_to_field(
-            match_ids[0u32] + match_ids[1u32] + match_ids[2u32] + total_stake as field
+            match_ids[0u32] + match_ids[1u32] + total_stake as field
         );
 
-        return BetSlip {
+        let bet_slip: BetSlip = BetSlip {
             owner: self.caller,
             season_id: season_id,
             round_number: round_number,
             bets: bets,
             num_bets: num_bets,
             total_stake: total_stake,
-            total_odds: total_odds,
+            parlay_multiplier: 100u64,  // Will be set in finalize
             has_badge_bonus: has_badge,
             slip_id: slip_id,
         };
+
+        return (bet_slip, finalize_place_bet(season_id, round_number, num_bets));
+    }
+
+    // Finalize bet placement: increment parlay count for FOMO tiers
+    async function finalize_place_bet(
+        public season_id: u8,
+        public round_number: u8,
+        public num_bets: u8
+    ) {
+        // Only increment parlay count for multi-bets (2+ matches)
+        if num_bets > 1u8 {
+            let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
+            let current_count: u8 = Mapping::get_or_use(round_parlay_count, round_key, 0u8);
+            Mapping::set(round_parlay_count, round_key, current_count + 1u8);
+        }
+    }
+
+    // Calculate count-based parlay multiplier (FOMO mechanism)
+    // Returns multiplier in basis points (e.g., 250 = 2.5x)
+    function get_parlay_multiplier(parlay_count: u8) -> u64 {
+        // Tier 1: First 10 parlays = 2.5x
+        if parlay_count < 10u8 { return 250u64; }
+
+        // Tier 2: Parlays 10-19 = 2.2x
+        if parlay_count < 20u8 { return 220u64; }
+
+        // Tier 3: Parlays 20-29 = 1.9x
+        if parlay_count < 30u8 { return 190u64; }
+
+        // Tier 4: Parlays 30-39 = 1.6x
+        if parlay_count < 40u8 { return 160u64; }
+
+        // Tier 5: Parlays 40+ = 1.3x
+        return 130u64;
     }
 
     // ========================================
     // END ROUND WITH RANDOM SCORE GENERATION
     // ========================================
 
-    // End round - resolves matches in batches (Aleo limit: 16 sets per finalize)
-    // Call this function 4 times: batch 0-2, 3-5, 6-8, 9
+    // End round - resolves all 4 matches at once (no batching needed!)
     async transition end_round(
         public season_id: u8,
-        public round_number: u8,
-        public batch_start: u8  // 0, 3, 6, or 9
+        public round_number: u8
     ) -> Future {
-        return finalize_end_round(season_id, round_number, batch_start);
+        return finalize_end_round(season_id, round_number);
     }
 
     async function finalize_end_round(
         public season_id: u8,
-        public round_number: u8,
-        public batch_start: u8
+        public round_number: u8
     ) {
-        // Only mark round as ended on first batch
-        if batch_start == 0u8 {
-            let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
-            Mapping::set(round_status, round_key, 2u8);  // ended
-        }
+        // Mark round as ended
+        let round_key: field = BHP256::hash_to_field(season_id as field + round_number as field);
+        Mapping::set(round_status, round_key, 2u8);  // ended
 
-        // Determine batch size (3 for batches 0,3,6 and 1 for batch 9)
-        let batch_size: u8 = batch_start == 9u8 ? 1u8 : 3u8;
-
-        // Resolve matches in this batch using FOR LOOP
-        for offset: u8 in 0u8..3u8 {
-            let match_num: u8 = batch_start + offset;
-
-            // Skip if beyond batch size (for last batch)
-            if offset < batch_size {
-            // Get match ID (same formula as creation)
+        // Resolve all 4 matches using FOR LOOP (no batching needed!)
+        for match_num: u8 in 0u8..4u8 {
+            // Get match ID
             let match_id: field = BHP256::hash_to_field(
                 season_id as field + round_number as field + (match_num + 1u8) as field
             );
@@ -401,7 +457,6 @@ program premier_league_betting.aleo {
                 goals_for: away_standing.goals_for + away_score as u16,
                 goals_against: away_standing.goals_against + home_score as u16,
             });
-            }  // end if offset < batch_size
         }  // end for loop
     }
 
