@@ -29,10 +29,12 @@ KEY MECHANICS:
 - Early-but-lost bettors may receive partial compensation
 - All votes remain private until resolution
 
-POOL DISTRIBUTION (after 2% protocol fee):
-- Winner Base Pool:        55% (proportional to raw stake)
-- Winner Conviction Pool:  35% (proportional to effective stake)
-- Temporal Compensation:   10% (for early-but-lost bettors)
+POOL DISTRIBUTION (after fees):
+- Protocol Fee:            1% (fixed, goes to protocol)
+- Market Maker Fee:        0-2% (set by creator, goes to market maker)
+- Winner Base Pool:        55% of remaining (proportional to raw stake)
+- Winner Conviction Pool:  35% of remaining (proportional to effective stake)
+- Temporal Compensation:   10% of remaining (for early-but-lost bettors)
 "
 
 echo "
@@ -42,7 +44,10 @@ echo "
 "
 
 echo "Creating a new market..."
-leo run create_market 1234567890field 1000u32 5000u32 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 1u64 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr
+echo "Parameters: question_hash, start_block, end_block, resolver, min_bettors, fee_recipient, maker_fee_bps"
+echo "Duration: 4000 blocks (min 2160 required = ~6 hours)"
+echo "Maker fee: 1% (100 basis points)"
+leo run create_market 1234567890field 1000u32 5000u32 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 1u64 aleo1rfez44epy0m7nv4pskvjy6vex64tnt0xy90fyhrg49cwe0t9ws8sh6nhhr 100u64
 
 echo "
 Market created! The output shows:
@@ -103,7 +108,7 @@ echo "
 ###############################################################################
 
 All transitions compiled and tested successfully:
-- create_market: Creates a new betting market
+- create_market: Creates a new betting market (min 6hr duration, 0-2% maker fee)
 - place_bet: Places a private bet with time segment
 - close_market: Closes market to new bets
 - resolve_market: Submits resolution with minority by COUNT
@@ -112,7 +117,8 @@ All transitions compiled and tested successfully:
 - claim_reward: Winners claim their payout
 - claim_compensation: Eligible losers claim compensation
 - refund: Refund for invalid markets
-- withdraw_fees: Protocol fee withdrawal
+- withdraw_fees: Protocol fee withdrawal (1% fixed)
+- withdraw_maker_fees: Market maker fee withdrawal (0-2%)
 
 The All4One prediction market is ready for deployment!
 "

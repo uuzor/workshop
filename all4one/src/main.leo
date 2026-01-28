@@ -17,8 +17,12 @@ program all4one.aleo {
     const BASE_POOL_BPS: u64 = 5500u64;
     const CONVICTION_POOL_BPS: u64 = 3500u64;
     const COMPENSATION_POOL_BPS: u64 = 1000u64;
-    const PROTOCOL_FEE_BPS: u64 = 200u64;
+    const PROTOCOL_FEE_BPS: u64 = 100u64;      // 1% protocol fee (fixed)
+    const MAX_MAKER_FEE_BPS: u64 = 200u64;     // 2% max market maker fee
     const COMPENSATION_CAP_BPS: u64 = 3000u64;
+
+    // Minimum market duration (~6 hours at 10s blocks)
+    const MIN_DURATION_BLOCKS: u32 = 2160u32;
 
     // Conviction weights (scaled by 100)
     const WEIGHT_S0: u64 = 150u64;
@@ -35,6 +39,7 @@ program all4one.aleo {
         question_hash: field,
         min_bettors: u64,
         fee_recipient: address,
+        maker_fee_bps: u64,
     }
 
     struct Resolution {
@@ -58,6 +63,7 @@ program all4one.aleo {
     mapping compensations: field => u64;
     mapping claims: field => bool;
     mapping fees_collected: field => u64;
+    mapping maker_fees: field => u64;
 
     record MarketReceipt {
         owner: address,
@@ -94,16 +100,21 @@ program all4one.aleo {
         public end_block: u32,
         public resolver: address,
         public min_bettors: u64,
-        public fee_recipient: address
+        public fee_recipient: address,
+        public maker_fee_bps: u64
     ) -> (MarketReceipt, Future) {
         assert(end_block > start_block);
         assert(min_bettors >= 1u64);
         let duration: u32 = end_block - start_block;
+        // Minimum 6 hours duration
+        assert(duration >= MIN_DURATION_BLOCKS);
+        // Market maker fee capped at 2%
+        assert(maker_fee_bps <= MAX_MAKER_FEE_BPS);
         let segment_blocks: u32 = duration / 4u32;
         assert(segment_blocks > 0u32);
         let market_id: field = BHP256::hash_to_field(question_hash);
         let receipt: MarketReceipt = MarketReceipt { owner: self.caller, market_id: market_id };
-        return (receipt, finalize_create_market(market_id, self.caller, resolver, start_block, end_block, segment_blocks, question_hash, min_bettors, fee_recipient));
+        return (receipt, finalize_create_market(market_id, self.caller, resolver, start_block, end_block, segment_blocks, question_hash, min_bettors, fee_recipient, maker_fee_bps));
     }
 
     async function finalize_create_market(
@@ -115,7 +126,8 @@ program all4one.aleo {
         segment_blocks: u32,
         question_hash: field,
         min_bettors: u64,
-        fee_recipient: address
+        fee_recipient: address,
+        maker_fee_bps: u64
     ) {
         let config: MarketConfig = MarketConfig {
             creator: creator,
@@ -126,6 +138,7 @@ program all4one.aleo {
             question_hash: question_hash,
             min_bettors: min_bettors,
             fee_recipient: fee_recipient,
+            maker_fee_bps: maker_fee_bps,
         };
         Mapping::set(markets, market_id, config);
         Mapping::set(market_active, market_id, true);
@@ -200,9 +213,15 @@ program all4one.aleo {
         assert(!active);
         let recorded_pool: u64 = Mapping::get(total_pool, market_id);
         assert_eq(recorded_pool, outcome_0_pool + outcome_1_pool);
-        let fee: u64 = recorded_pool * PROTOCOL_FEE_BPS / 10000u64;
-        let distributable_pool: u64 = recorded_pool - fee;
-        Mapping::set(fees_collected, market_id, fee);
+        // Calculate protocol fee (1% fixed)
+        let protocol_fee: u64 = recorded_pool * PROTOCOL_FEE_BPS / 10000u64;
+        // Calculate market maker fee (0-2% set by creator)
+        let maker_fee: u64 = recorded_pool * config.maker_fee_bps / 10000u64;
+        let total_fees: u64 = protocol_fee + maker_fee;
+        let distributable_pool: u64 = recorded_pool - total_fees;
+        // Store fees separately
+        Mapping::set(fees_collected, market_id, protocol_fee);
+        Mapping::set(maker_fees, market_id, maker_fee);
         let is_valid: bool = outcome_0_count >= config.min_bettors && outcome_1_count >= config.min_bettors;
         // Minority by COUNT (not amount!) - use ternary for async function
         let minority_outcome: u8 = outcome_1_count < outcome_0_count ? 1u8 : 0u8;
@@ -336,5 +355,17 @@ program all4one.aleo {
         let config: MarketConfig = Mapping::get(markets, market_id);
         assert_eq(caller, config.fee_recipient);
         Mapping::set(fees_collected, market_id, 0u64);
+    }
+
+    // 11. WITHDRAW MARKET MAKER FEES
+    async transition withdraw_maker_fees(public market_id: field) -> Future {
+        return finalize_withdraw_maker_fees(market_id, self.caller);
+    }
+
+    async function finalize_withdraw_maker_fees(market_id: field, caller: address) {
+        let config: MarketConfig = Mapping::get(markets, market_id);
+        // Only market creator can withdraw maker fees
+        assert_eq(caller, config.creator);
+        Mapping::set(maker_fees, market_id, 0u64);
     }
 }
